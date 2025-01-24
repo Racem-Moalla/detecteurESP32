@@ -32,3 +32,8 @@ Ce code est responsable de :
    ```cpp
    const char* ssid = "Votre_SSID";
    const char* password = "Votre_MotDePasse";
+4. Configurez l'adresse IP du serveur MQTT :
+   Modifier
+   const char* mqttServer = "192.168.x.x"; // Remplacez par l'adresse IP de votre serveur MQTT
+5. Compilez et téléversez le code sur l'ESP32.
+6. Une fois le téléversement terminé, ouvrez le moniteur série pour vérifier les logs.
