@@ -10,7 +10,7 @@ const char* ssid = "presence";
 const char* password = "xhc6T7mASs";
 
 // Adresse IP du broker MQTT
-const char* mqttServer = "X.X.X.X";
+const char* mqttServer = "10.3.141.1";
 const int mqttPort = 1883;
 
 // Identifiants MQTT
@@ -44,12 +44,12 @@ String macBleDuDetecteur = "";
 const int x = 1; // Remplacez par l'ID du porte souhaité
 
 // Variables de temporisation pour le scan
-unsigned long previousMillisScan = 0; // Temps du dernier démarrage du scan
-unsigned long previousMillisReset = 0; // Temps du dernier reset de scan
-const long scanDuration = 60000; // Durée du scan en millisecondes (1 minute)
-const long waitDuration = 900000; // Durée de l'attente entre les scans en millisecondes (15 minutes)
+unsigned long previousMillisScan = 0;
+unsigned long previousMillisReset = 0;
+const long scanDuration = 60000;  // 1 min
+const long waitDuration = 900000; // 15 min
 
-bool scanningComplete = false; // Indicateur pour savoir si le scan est terminé
+bool scanningComplete = false; // Indicateur de fin de scan
 
 // Fonction pour récupérer la MAC BLE du détecteur
 void getMacBleDuDetecteur() {
@@ -89,10 +89,10 @@ void connectMQTT() {
 // Fonction pour démarrer un scan BLE
 void startScan() {
   Serial.println("Scan BLE démarré.");
-  pBLEScan->start(scanDuration / 1000, false); // Scan pendant la durée définie (60 secondes)
+  pBLEScan->start(scanDuration / 1000, false);
 }
 
-// Classe personnalisée pour gérer les périphériques BLE détectés
+// Classe pour gérer les périphériques BLE détectés
 class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice advertisedDevice) {
     if (advertisedDevice.haveManufacturerData()) {
@@ -101,7 +101,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
       Serial.println(manufacturerData.length());
 
       if (manufacturerData.length() >= 22) {
-        // Extraction de l'UUID (16 octets à partir de l'index 2)
+        // Extraction de l'UUID
         String uuid = "";
         for (int i = 2; i < 18; i++) {
           uuid += String(manufacturerData[i] >> 4, HEX);
@@ -111,13 +111,10 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
         uuid.toUpperCase();
 
         if (uuid == "2D7A9F0C-E0E8-4CC9-A71B-A21DB2D034A1") {
-          // Extraire le champ Major (octets 16-17)
           uint16_t major = (manufacturerData[18] << 8) | manufacturerData[19];
-
-          // Extraire le champ Minor (octets 18-19)
           uint16_t minor = (manufacturerData[20] << 8) | manufacturerData[21];
 
-          // Extraire l'adresse MAC détectée
+          // Extraction de l'adresse MAC détectée
           String macAddress = "";
           for (int i = 22; i < 28; i++) {
             macAddress += String(manufacturerData[i] >> 4, HEX);
@@ -154,7 +151,6 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
 // Fonction d'initialisation
 void setup() {
   Serial.begin(115200);
-
   getMacBleDuDetecteur();
   connectWiFi();
   connectMQTT();
@@ -164,7 +160,6 @@ void setup() {
   pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
   pBLEScan->setActiveScan(true);
 
-  // Initialisation du scan périodique
   startScan();
 }
 
@@ -181,67 +176,45 @@ void loop() {
   }
   client.loop();
 
-  // Si le scan est terminé et qu'il faut attendre 15 minutes avant le prochain scan
   if (scanningComplete) {
     if (currentMillis - previousMillisReset >= waitDuration) {
       previousMillisReset = currentMillis;
       scanningComplete = false;
-      deviceCount = 0; // Réinitialiser la liste des appareils détectés
-      startScan(); // Démarrer un nouveau scan après 15 minutes
+      deviceCount = 0;
+      startScan();
     }
   }
 
-  // Si le scan dure 1 minute
   if (currentMillis - previousMillisScan >= scanDuration) {
     previousMillisScan = currentMillis;
-    scanningComplete = true; // Indiquer que le scan est terminé
+    scanningComplete = true;
 
-    // Publier les données sur les topics MQTT
-    if (deviceCount > 0) {
-      StaticJsonDocument<512> doc;
-      JsonArray devices = doc.createNestedArray("devices");
-
-      // Ajouter tous les appareils détectés à la liste
-      for (int i = 0; i < deviceCount; i++) {
-        JsonObject device = devices.createNestedObject();
-        device["idSTRI"] = detectedDevices[i].uuid;
-        device["mac_address_detectee"] = detectedDevices[i].macAddress;
-        device["année"] = detectedDevices[i].major;
-        device["idBadge"] = detectedDevices[i].minor;
-      }
-
-      // Ajouter les informations MAC de l'ESP32
+    // Envoyer chaque appareil individuellement
+    for (int i = 0; i < deviceCount; i++) {
+      StaticJsonDocument<256> doc;
+      doc["idSTRI"] = detectedDevices[i].uuid;
+      doc["mac_address_detectee"] = detectedDevices[i].macAddress;
+      doc["année"] = detectedDevices[i].major;
+      doc["idBadge"] = detectedDevices[i].minor;
       doc["macBLE"] = macBleDuDetecteur;
       doc["macWIFI"] = WiFi.macAddress();
 
-      // Sérialiser le message JSON dans un buffer
-      char jsonBuffer[512];
+      char jsonBuffer[256];
       serializeJson(doc, jsonBuffer);
 
-      // Publication sur le topic `/detecteur/presence/macwifi/xx:xx:xx:xx`
-      String macWiFiTopic = "/detecteur/presence/macwifi/" + WiFi.macAddress();
-      bool success = client.publish(macWiFiTopic.c_str(), jsonBuffer);
+      // Publier sur un topic unique pour chaque appareil
+      String topic = "detecteur/presence/macwifi/" + detectedDevices[i].macAddress;
+      bool success = client.publish(topic.c_str(), jsonBuffer);
 
       if (success) {
-        Serial.println("Message envoyé au topic : " + macWiFiTopic);
-        Serial.println("Payload : " + String(jsonBuffer));
+        Serial.println("Message envoyé : " + String(jsonBuffer));
       } else {
         Serial.println("Erreur d'envoi du message.");
       }
 
-      // Publication sur le topic `/detecteur/presence/iddetecteur/x`
-      String idDetecteurTopic = "/detecteur/presence/iddetecteur/" + String(x);
-      success = client.publish(idDetecteurTopic.c_str(), jsonBuffer);
-
-      if (success) {
-        Serial.println("Message envoyé au topic : " + idDetecteurTopic);
-        Serial.println("Payload : " + String(jsonBuffer));
-      } else {
-        Serial.println("Erreur d'envoi du message.");
-      }
-
-      // Réinitialiser les variables pour le prochain scan
-      deviceCount = 0;
+      delay(100); // Petite pause pour éviter la surcharge du broker MQTT
     }
+
+    deviceCount = 0;
   }
 }
